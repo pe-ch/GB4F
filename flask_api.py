@@ -1,0 +1,71 @@
+import pandas as pd
+from flask import Flask, request, jsonify, send_from_directory
+
+app = Flask(__name__)
+
+# Sample Book Database (Initial)
+df_books = pd.DataFrame([
+    {"id": 1, "title": "Book A", "author": "Author X", "genre": "Fiction", "price": 12.99},
+    {"id": 2, "title": "Book B", "author": "Author Y", "genre": "Science", "price": 19.99},
+    {"id": 3, "title": "Book C", "author": "Author Z", "genre": "History", "price": 15.50},
+])
+
+# Internal database where chosen books are stored
+df_selected_books = pd.DataFrame(columns=df_books.columns)
+
+@app.route('/')
+def home():
+    return "Welcome to the Book API! Use /search_books, /select_book, and /get_selected_books."
+
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory('static', 'favicon.ico', mimetype='image/vnd.microsoft.icon')
+
+@app.route('/search_books', methods=['POST'])
+def search_books():
+    """Receives search query and returns matching books."""
+    data = request.get_json()
+    
+    if not data or "query" not in data:
+        return jsonify({"error": "Missing 'query' in request"}), 400
+    
+    query = data["query"]
+    
+    # Filter books based on the query
+    filtered_books = df_books[df_books["genre"].str.contains(query, case=False, na=False)]
+
+    if filtered_books.empty:
+        return jsonify({"message": "No books found for this query"}), 404
+
+    return jsonify(filtered_books.to_dict(orient="records"))
+
+@app.route('/select_book', methods=['POST'])
+def select_book():
+    """Receives selected book and adds it to internal database."""
+    global df_selected_books  # Use global to modify DataFrame
+
+    data = request.get_json()
+
+    if not data or "id" not in data:
+        return jsonify({"error": "Missing 'id' in request"}), 400
+
+    book_id = data["id"]
+    
+    # Find the book by ID
+    selected_book = df_books[df_books["id"] == book_id]
+
+    if selected_book.empty:
+        return jsonify({"error": "Book not found"}), 404
+
+    # Append to internal database
+    df_selected_books = pd.concat([df_selected_books, selected_book], ignore_index=True)
+
+    return jsonify({"message": f"Book {book_id} added successfully"}), 200
+
+@app.route('/get_selected_books', methods=['GET'])
+def get_selected_books():
+    """Returns all books that were selected."""
+    return jsonify(df_selected_books.to_dict(orient="records"))
+
+if __name__ == '__main__':
+    app.run(debug=True)
