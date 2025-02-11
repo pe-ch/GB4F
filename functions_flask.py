@@ -7,6 +7,75 @@ import json
 import pandas as pd
 import numpy as np
 from IPython.display import Image, display
+from pymongo import MongoClient
+from dotenv import load_dotenv
+import os
+import pymongo
+import pandas as pd
+from bson import ObjectId  # Required for ObjectId conversion
+
+
+
+def get_mongo_uri():
+    """Loads and returns the MongoDB URI from the .env file."""
+    load_dotenv()  # Load environment variables from .env
+    mongo_uri = os.getenv("MONGO_URI")  # Retrieve the URI
+
+    if not mongo_uri:
+        raise ValueError("MONGO_URI not found in .env file!")
+
+    return mongo_uri  # Return the URI as a string
+
+def place_book_in_mongo(books_df, mongo_uri=None, db_name="books_db", collection_name="stored_books"):
+    """Inserts a Pandas DataFrame (single or multiple rows) into MongoDB.
+
+    - Converts the DataFrame into a list of dictionaries.
+    - Uses a provided MongoDB URI or defaults to local.
+    - Manages the connection automatically.
+    """
+    if not isinstance(books_df, pd.DataFrame):
+        raise ValueError("Expected a Pandas DataFrame as input")
+
+    # Convert DataFrame to a list of dictionaries
+    books_list = books_df.to_dict(orient="records")  
+
+    # Use provided MongoDB URI or fallback to localhost
+    mongo_uri = mongo_uri or "mongodb://localhost:27017/"
+
+    with MongoClient(mongo_uri) as client:  # Auto-close connection
+        db = client[db_name]
+        collection = db[collection_name]
+        result = collection.insert_many(books_list)
+        print(f"✅ {len(result.inserted_ids)} book(s) added.")
+
+
+
+
+
+def import_from_mongo(mongo_uri=None, db_name="books_db", collection_name="stored_books") -> pd.DataFrame:
+    """Fetches all book entries from MongoDB and returns them as a Pandas DataFrame."""
+
+    mongo_uri = mongo_uri or "mongodb://localhost:27017/"
+
+    with MongoClient(mongo_uri) as client:
+        db = client[db_name]
+        collection = db[collection_name]
+
+        # Retrieve all documents
+        books_list = list(collection.find())
+
+        # 🔥 Convert `_id` field from ObjectId to string
+        for book in books_list:
+            if "_id" in book:
+                book["_id"] = str(book["_id"])
+
+        # Convert list to Pandas DataFrame
+        df = pd.DataFrame(books_list) if books_list else pd.DataFrame()
+
+    return df
+
+
+
 
 
 def fetch_books_data(query_params):
@@ -322,7 +391,7 @@ def remove_selection_by_index(selected_book):
     print(stored_books_df.head(5))
 
 #This works but is less elegant
-
+'''
 def remove_selection_by_drop_dublicates(selected_book):
     #This function changes to Is_Placed Lable to false on the selection
     if selected_book is None:
@@ -341,6 +410,8 @@ def remove_selection_by_drop_dublicates(selected_book):
 
         print("Updated stored_books_df:")
         print(stored_books_df.head(5))
+
+        '''
 
 def search_removed_books(query_params):
 

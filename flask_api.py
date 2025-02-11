@@ -1,5 +1,5 @@
 import pandas as pd
-from flask import Flask, request, jsonify, send_from_directory, g
+from flask import Flask, request, jsonify, send_from_directory
 import requests
 from requests import Request, Session
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
@@ -9,19 +9,10 @@ import numpy as np
 from IPython.display import Image, display
 from functions_flask import *
 import sqlite3
-
+import os
+from dotenv import load_dotenv
 
 app = Flask(__name__)
-
-# Sample Book Database (Initial)
-df_books = pd.DataFrame([
-    {"id": 1, "title": "Book A", "author": "Author X", "genre": "Fiction", "price": 12.99},
-    {"id": 2, "title": "Book B", "author": "Author Y", "genre": "Science", "price": 19.99},
-    {"id": 3, "title": "Book C", "author": "Author Z", "genre": "History", "price": 15.50},
-])
-
-# Internal database where chosen books are stored
-df_selected_books = pd.DataFrame(columns=df_books.columns)
 
 @app.route('/')
 def home():
@@ -53,19 +44,19 @@ def search_books():
     # Convert to Dataframe
     API_books_df= json_to_dataframe(raw_data)
 
-    # Filter books based on the query
-    #filtered_books = df_books[df_books["genre"].str.contains(query, case=False, na=False)]
 
     if API_books_df.empty:
         return jsonify({"message": "No books found for this query"}), 404
 
     return jsonify(API_books_df.to_dict(orient="records"))
 
-#stored_books_df = pd.DataFrame()  # Global DataFrame for storing selected books
 
 @app.route('/select_book', methods=['POST'])
 def select_book_API():
-    """Selects a book from the previous search results using book_id."""
+    """Selects a book from the previous search results using book_id.
+    {"book_id":1}
+    
+    """
     global API_books_df # Access global variable
 
     data = request.get_json()
@@ -79,12 +70,13 @@ def select_book_API():
     if selected_book.empty:
         return jsonify({"error": "Invalid book_id"}), 404
 
-    # Save to SQLite
-    with sqlite3.connect("books.db") as conn:
-        selected_book.to_sql("stored_books", conn, if_exists="append", index=False)
 
-    # Append to stored books
-    #stored_books_df = pd.concat([stored_books_df, selected_book], ignore_index=True)
+    # Get MongoDB client (connected to Atlas)
+    # Get MongoDB Atlas URI from .env
+    mongo_uri = get_mongo_uri()
+
+    # Save to mongodb
+    place_book_in_mongo(selected_book, mongo_uri)  # 🔥 Insert into MongoDB
 
     # **Flush API_books_df after selection**
     API_books_df = None  
@@ -94,11 +86,12 @@ def select_book_API():
 
 @app.route('/get_selected_books', methods=['GET'])
 def get_selected_books():
-    """Fetch all selected books from the SQLite database."""
-    with sqlite3.connect("books.db") as conn:
-        df = pd.read_sql("SELECT * FROM stored_books", conn)
+    """Fetch all selected books from MongoDB and return as JSON."""
+    mongo_uri = get_mongo_uri()
+    df = import_from_mongo(mongo_uri)  # 🔥 Fetch from MongoDB
 
     return jsonify(df.to_dict(orient="records"))
+
 
 if __name__ == '__main__':
     app.run(debug=True)
