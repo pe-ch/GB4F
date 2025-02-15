@@ -46,10 +46,10 @@ def select_book():
     if not data or "id" not in data:
         return jsonify({"error": "Missing 'id' in request"}), 400
 
-    book_id = data["id"]
+    selection_id = data["id"]
     
     # Find the book by ID
-    selected_book = df_books[df_books["id"] == book_id]
+    selected_book = df_books[df_books["id"] == selection_id]
 
     if selected_book.empty:
         return jsonify({"error": "Book not found"}), 404
@@ -57,7 +57,7 @@ def select_book():
     # Append to internal database
     df_selected_books = pd.concat([df_selected_books, selected_book], ignore_index=True)
 
-    return jsonify({"message": f"Book {book_id} added successfully"}), 200
+    return jsonify({"message": f"Book {selection_id} added successfully"}), 200
 
 @app.route('/get_selected_books', methods=['GET'])
 def get_selected_books():

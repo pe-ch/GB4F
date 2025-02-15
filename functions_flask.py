@@ -1,5 +1,5 @@
 import pandas as pd
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response
 import requests
 from requests import Request, Session
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
@@ -12,13 +12,12 @@ from dotenv import load_dotenv
 import os
 import pymongo
 import pandas as pd
-from bson import ObjectId  # Required for ObjectId conversion
-
+from bson import ObjectId, errors
 
 
 def get_mongo_uri():
     """Loads and returns the MongoDB URI from the .env file."""
-    load_dotenv()  # Load environment variables from .env
+    load_dotenv(".env")  # Load environment variables from .env
     mongo_uri = os.getenv("MONGO_URI")  # Retrieve the URI
 
     if not mongo_uri:
@@ -26,7 +25,7 @@ def get_mongo_uri():
 
     return mongo_uri  # Return the URI as a string
 
-def place_book_in_mongo(books_df, mongo_uri=None, db_name="books_db", collection_name="stored_books"):
+def place_book_in_mongo(books_df, mongo_uri=None, db_name="test", collection_name="stored_books"):
     """Inserts a Pandas DataFrame (single or multiple rows) into MongoDB.
 
     - Converts the DataFrame into a list of dictionaries.
@@ -40,7 +39,7 @@ def place_book_in_mongo(books_df, mongo_uri=None, db_name="books_db", collection
     books_list = books_df.to_dict(orient="records")  
 
     # Use provided MongoDB URI or fallback to localhost
-    mongo_uri = mongo_uri or "mongodb://localhost:27017/"
+    mongo_uri = mongo_uri #or "mongodb://localhost:27017/"
 
     with MongoClient(mongo_uri) as client:  # Auto-close connection
         db = client[db_name]
@@ -48,14 +47,46 @@ def place_book_in_mongo(books_df, mongo_uri=None, db_name="books_db", collection
         result = collection.insert_many(books_list)
         print(f"✅ {len(result.inserted_ids)} book(s) added.")
 
+        collection.create_index([
+            ("Authors", "text"), 
+            ("Publisher", "text"), 
+            ("Title", "text")
+        ])
+
+
+def remove_selection_from_mongo(mongo_ID, mongo_uri=None, db_name="test", collection_name="stored_books"):
+    #takes a mongo ObjectID _ID
+    with MongoClient(mongo_uri) as client:  # Auto-close connection
+        db = client[db_name]
+        collection = db[collection_name]
+
+        result = collection.find_one_and_update(
+            {"_id": mongo_ID}, 
+            {"$set": {"book_shelf": -1}},
+            return_document=True  # Return updated version
+        )
+
+        if result is None:  # Handle missing ID
+            return None
+
+        return {"success": f"Document updated successfully"}
+
+def check_correct_mongo_ID(mongo_ID):
+    
+    if not mongo_ID:
+        return None
+
+    try:
+        return ObjectId(mongo_ID)  # Convert safely
+    except errors.InvalidId:
+        return None
 
 
 
-
-def import_from_mongo(mongo_uri=None, db_name="books_db", collection_name="stored_books") -> pd.DataFrame:
+def import_from_mongo(mongo_uri=None, db_name="test", collection_name="stored_books") -> pd.DataFrame:
     """Fetches all book entries from MongoDB and returns them as a Pandas DataFrame."""
 
-    mongo_uri = mongo_uri or "mongodb://localhost:27017/"
+    mongo_uri = mongo_uri #or "mongodb://localhost:27017/"
 
     with MongoClient(mongo_uri) as client:
         db = client[db_name]
@@ -75,6 +106,42 @@ def import_from_mongo(mongo_uri=None, db_name="books_db", collection_name="store
     return df
 
 
+def unify_json_inX_to_X(query_params):
+    """
+    Renames specific keys in the query_params dictionary to a unified format.
+    
+    - "intitle" → "Title"
+    - "inauthor" → "Authors"
+    - "isbn" → "ISBN_13" (if 13 digits) or "ISBN_10" (if 10 digits)
+    
+    :param query_params: Dictionary with query parameters.
+    :return: New dictionary with transformed keys.
+    """
+    
+    isbn = query_params.pop("isbn", None)  # Extract & remove "isbn" safely
+    isbn_key = None
+    
+    if isbn:
+        isbn_length = len(isbn)
+        if isbn_length == 13:
+            isbn_key = "ISBN_13"
+        elif isbn_length == 10:
+            isbn_key = "ISBN_10"
+    
+    # New dictionary with updated keys
+    transformed_params = {
+        "Title": query_params.pop("intitle", None),
+        "Authors": query_params.pop("inauthor", None)
+    }
+    
+    # Add ISBN if it exists
+    if isbn_key:
+        transformed_params[isbn_key] = isbn
+
+    # Preserve any other parameters
+    transformed_params.update(query_params)
+
+    return {k: v for k, v in transformed_params.items() if v is not None}  # Remove `None` values
 
 
 
@@ -91,6 +158,9 @@ def fetch_books_data(query_params):
     # Dynamically build the query string from the dictionary of query parameters
     # Each key-value pair in the dictionary is formatted as "key:value"
     # The "join" function combines these pairs with spaces to create the full query string
+    
+    
+
     query = " ".join(f"{key}:{value}" for key, value in query_params.items())
 
     # Define the parameters for the API request
@@ -133,7 +203,7 @@ def format_json(raw_data):
         print(f"Error formatting JSON: {e}")
         return "{}"
 
-def json_to_dataframe(raw_data):
+def json_to_dataframe(raw_data, book_shelf):
     """
     Transform JSON data from the Google Books API into a pandas DataFrame.
 
@@ -147,14 +217,15 @@ def json_to_dataframe(raw_data):
         # Prepare a list to store extracted metadata
         metadata = []
 
-        # Initialize book_id counter
-        book_id_counter = 1
+        # Initialize selection_id counter
+        selection_id_counter = 1
 
         # Iterate through the books and extract relevant fields
         for item in items:
             volume_info = item.get("volumeInfo", {})
             record = {
-                "book_id": book_id_counter,  # Add running book_id
+                "book_shelf": book_shelf,
+                "selection_id": selection_id_counter,  # Add running selection_id
                 "ID": item.get("id", np.nan),
                 "Title": volume_info.get("title", np.nan),
                 "Authors": ", ".join(volume_info.get("authors", [])) if "authors" in volume_info else np.nan, #note this may return an emtpy [] not NAN
@@ -184,8 +255,8 @@ def json_to_dataframe(raw_data):
             }
             metadata.append(record)
 
-            # Increment the book_id counter after each book
-            book_id_counter += 1
+            # Increment the selection_id counter after each book
+            selection_id_counter += 1
 
         # Create a DataFrame from the metadata
         return pd.DataFrame(metadata)
@@ -225,6 +296,46 @@ def and_filter(stored_books_df, and_query):
 
     filt_df= stored_books_df.loc[mask]
     return filt_df
+
+
+def or_filter_mongo(or_query, mongo_uri=get_mongo_uri(), db_name="test", collection_name="stored_books"):
+    """ 
+    Performs an OR-based regex search in MongoDB and returns results as JSON.
+    
+    :param or_query: Dictionary with key-value pairs to search.
+    :param mongo_uri: MongoDB connection string.
+    :param db_name: Name of the database.
+    :param collection_name: Name of the collection.
+    :return: JSON string of matching documents.
+    """
+
+    # Clean and format search parameters for case-insensitive regex search
+    or_conditions = [
+        {key: {"$regex": f".*{value}.*", "$options": "i"}} for key, value in or_query.items()
+    ]
+
+    query = {
+        "$and": [
+            {"$or": or_conditions} if or_conditions else {},  # Your original OR filter
+            {"book_shelf": {"$ne": -1}}  # Exclude books where book_shelf == -1
+        ]
+    }
+
+    with MongoClient(mongo_uri) as client:
+        db = client[db_name]
+        collection = db[collection_name]
+        results_cursor = collection.find(query)
+
+        # Convert cursor to list of dictionaries
+        results_list = list(results_cursor)
+
+    # Convert ObjectId to string for JSON compatibility
+    for doc in results_list:
+        doc["_id"] = str(doc["_id"])  # Convert ObjectId to string
+    
+    json_data = json.dumps(results_list, indent=4)  # Convert to JSON string
+    return Response(json_data, content_type="application/json")  # Return proper JSON response
+
 
 def or_filter(stored_books_df, or_query):
     #accepts a dictionary
