@@ -1,19 +1,18 @@
 import pandas as pd
 from flask import Flask, request, jsonify, send_from_directory, Response
 import requests
-from requests import Request, Session
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
 import json
-import pandas as pd
 import numpy as np
 from IPython.display import Image, display
 from pymongo import MongoClient
 from dotenv import load_dotenv
 import os
 import pymongo
-import pandas as pd
 from bson import ObjectId, errors
 
+
+#Handling mongo db
 
 def get_mongo_uri():
     """Loads and returns the MongoDB URI from the .env file."""
@@ -105,6 +104,63 @@ def import_from_mongo(mongo_uri=None, db_name="test", collection_name="stored_bo
 
     return df
 
+def or_filter_mongo(or_query, mongo_uri=get_mongo_uri(), db_name="test", collection_name="stored_books"):
+    """ 
+    Performs an OR-based regex search in MongoDB and returns results as JSON.
+    
+    :param or_query: Dictionary with key-value pairs to search.
+    :param mongo_uri: MongoDB connection string.
+    :param db_name: Name of the database.
+    :param collection_name: Name of the collection.
+    :return: JSON string of matching documents.
+    """
+
+    book_shelf = or_query.pop("book_shelf", None)
+
+    # Clean and format search parameters for case-insensitive regex search
+    or_conditions = [
+        {key: {"$regex": f".*{value}.*", "$options": "i"}} for key, value in or_query.items()
+    ]
+
+    if book_shelf == -1:
+
+        query = {
+            "$and": [
+                {"$or": or_conditions} if or_conditions else {},  # Your original OR filter
+                {"book_shelf":-1}
+            ]
+        }
+    elif book_shelf is None:
+        query = {"$or": or_conditions} if or_conditions else {},  # Your original OR filter
+    
+    else:
+        query = {
+            "$and": [
+                {"$or": or_conditions} if or_conditions else {},  # Your original OR filter
+                {"book_shelf": {"$ne": -1}},  # Exclude books where book_shelf == -1
+                {"book_shelf": book_shelf}
+            ]
+        }
+
+
+    with MongoClient(mongo_uri) as client:
+        db = client[db_name]
+        collection = db[collection_name]
+        results_cursor = collection.find(query)
+
+        # Convert cursor to list of dictionaries
+        results_list = list(results_cursor)
+
+    # Convert ObjectId to string for JSON compatibility
+    for doc in results_list:
+        doc["_id"] = str(doc["_id"])  # Convert ObjectId to string
+    
+    json_data = json.dumps(results_list, indent=4)  # Convert to JSON string
+    return Response(json_data, content_type="application/json")  # Return proper JSON response
+
+
+
+#Handling the API request
 
 def unify_json_inX_to_X(query_params):
     """
@@ -265,6 +321,50 @@ def json_to_dataframe(raw_data, book_shelf):
         print(f"Error processing JSON data: {e}")
         return pd.DataFrame()
 
+
+def open_library_API_ISBN_to_description(isbn):
+    url = f"https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&jscmd=details&format=json"
+
+    response = requests.get(url)
+
+    if response.status_code != 200:
+        return "No description available." #This should be updated
+    
+    data = response.json()
+
+    book_key = f"ISBN:{isbn}"
+    
+    if book_key not in data:
+        return "No description available."
+    
+    details = data[book_key].get("details", {})
+
+    # Try to get a description
+    if "description" in details:
+        if isinstance(details["description"], dict):
+            return details["description"].get("value", "No description available.")
+        return details["description"]
+    
+    return "No description available."
+
+
+def add_description_by_isbn(books_df):
+    if 'ISBN_13' in books_df.columns and books_df['ISBN_13'].notna().any():
+        books_df['description'] = books_df['ISBN_13'].fillna(books_df.get('ISBN_10')).apply(open_library_API_ISBN_to_description)
+    elif 'ISBN_10' in books_df.columns and books_df['ISBN_10'].notna().any():
+        books_df['description'] = books_df['ISBN_10'].apply(open_library_API_ISBN_to_description)
+    
+    return books_df
+
+
+
+
+
+
+
+'''
+old code not used anymore
+
 def initiate_stored_books_df():
     global stored_books_df
 
@@ -296,45 +396,6 @@ def and_filter(stored_books_df, and_query):
 
     filt_df= stored_books_df.loc[mask]
     return filt_df
-
-
-def or_filter_mongo(or_query, mongo_uri=get_mongo_uri(), db_name="test", collection_name="stored_books"):
-    """ 
-    Performs an OR-based regex search in MongoDB and returns results as JSON.
-    
-    :param or_query: Dictionary with key-value pairs to search.
-    :param mongo_uri: MongoDB connection string.
-    :param db_name: Name of the database.
-    :param collection_name: Name of the collection.
-    :return: JSON string of matching documents.
-    """
-
-    # Clean and format search parameters for case-insensitive regex search
-    or_conditions = [
-        {key: {"$regex": f".*{value}.*", "$options": "i"}} for key, value in or_query.items()
-    ]
-
-    query = {
-        "$and": [
-            {"$or": or_conditions} if or_conditions else {},  # Your original OR filter
-            {"book_shelf": {"$ne": -1}}  # Exclude books where book_shelf == -1
-        ]
-    }
-
-    with MongoClient(mongo_uri) as client:
-        db = client[db_name]
-        collection = db[collection_name]
-        results_cursor = collection.find(query)
-
-        # Convert cursor to list of dictionaries
-        results_list = list(results_cursor)
-
-    # Convert ObjectId to string for JSON compatibility
-    for doc in results_list:
-        doc["_id"] = str(doc["_id"])  # Convert ObjectId to string
-    
-    json_data = json.dumps(results_list, indent=4)  # Convert to JSON string
-    return Response(json_data, content_type="application/json")  # Return proper JSON response
 
 
 def or_filter(stored_books_df, or_query):
@@ -502,7 +563,7 @@ def remove_selection_by_index(selected_book):
     print(stored_books_df.head(5))
 
 #This works but is less elegant
-'''
+
 def remove_selection_by_drop_dublicates(selected_book):
     #This function changes to Is_Placed Lable to false on the selection
     if selected_book is None:
@@ -522,7 +583,7 @@ def remove_selection_by_drop_dublicates(selected_book):
         print("Updated stored_books_df:")
         print(stored_books_df.head(5))
 
-        '''
+        
 
 def search_removed_books(query_params):
 
@@ -654,3 +715,5 @@ def select_book_from_results(API_books_df, removed_books_df):
                 print("Invalid selection. Please choose a valid option.")
         except ValueError:
             print("Invalid input. Please enter a number between 1 and 6, or 0 to cancel.")
+
+'''

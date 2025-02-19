@@ -1,19 +1,17 @@
 import pandas as pd
 from flask import Flask, request, jsonify, send_from_directory, Response
 import requests
-from requests import Request, Session
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
 import json
-import pandas as pd
 import numpy as np
 from IPython.display import Image, display
+import pymongo
 from functions_flask import *
-import sqlite3
 import os
 from dotenv import load_dotenv
 from bson import ObjectId, errors
 
-
+#.env contains a uri to connect to the mongo db database 
 load_dotenv(".env")
 
 app = Flask(__name__)
@@ -37,7 +35,7 @@ def search_books():
     "intitle": "Python",
     "inauthor": "Guido",
     "isbn": "9781449355739"
-    "book_shelf: "1"
+    "book_shelf": "1"
 } 
 '''
     #extract the book_shelf info, since this is independent of the API
@@ -52,9 +50,14 @@ def search_books():
     # Convert to Dataframe
     API_books_df= json_to_dataframe(raw_data, book_shelf)
 
+    
+    
 
     if API_books_df.empty:
         return jsonify({"message": "No books found for this query"}), 404
+    
+    #if books were found also add a description using open library API
+    add_description_by_isbn(API_books_df)
 
     return jsonify(API_books_df.to_dict(orient="records"))
 
@@ -84,9 +87,7 @@ def select_book_API():
     mongo_uri = get_mongo_uri()
 
     # Save to mongodb
-    place_book_in_mongo(selected_book, mongo_uri, db_name="test", collection_name="stored_books")  # 🔥 Insert into MongoDB
-
-    
+    place_book_in_mongo(selected_book, mongo_uri, db_name="test", collection_name="stored_books")  # Insert into MongoDB
 
     # **Flush API_books_df after selection**
     API_books_df = None  
@@ -98,13 +99,13 @@ def select_book_API():
 def get_selected_books():
     """Fetch all selected books from MongoDB and return as JSON."""
     mongo_uri = get_mongo_uri()
-    df = import_from_mongo(mongo_uri)  # 🔥 Fetch from MongoDB
+    df = import_from_mongo(mongo_uri)  # Fetch from MongoDB
     
     return jsonify(df.to_dict(orient="records"))
 
 
-@app.route('/select_books_to_remove', methods=['POST'])
-def select_books_to_remove():
+@app.route('/search_books_in_mongo', methods=['POST'])
+def search_books_in_mongo():
 
     query_params = request.get_json() #this accepts a dict in the API format
     '''
@@ -117,7 +118,7 @@ def select_books_to_remove():
         '''
     
     #extract the book_shelf info, since this is independent of the API
-    book_shelf = query_params.pop("book_shelf", -1)
+    #book_shelf = query_params.pop("book_shelf", -1)
 
     if not query_params:
         return jsonify({"error": "Request body must contain JSON data"}), 400
@@ -128,16 +129,18 @@ def select_books_to_remove():
 
     selected_books = or_filter_mongo(query_params_uni, mongo_uri=get_mongo_uri(), db_name="test", collection_name="stored_books")
 
-    print(selected_books)
+    #selected_books is a JSON file 
+
     return selected_books
 
 @app.route('/remove_by_ID', methods=['POST'])
 def remove_by_ID():
     data = request.get_json()
-    
-    
+      
     mongo_ID = data.get("_id")
+    #this makes sure no down stream errors occur
     mongo_ID = check_correct_mongo_ID(mongo_ID)
+
     print(mongo_ID)
     if mongo_ID is None:
         return jsonify({"message":"Wrong ID, nothing happened!"})
@@ -149,12 +152,6 @@ def remove_by_ID():
         return jsonify({"message":"Book_removed"})
     
     return jsonify({"message":"Wrong ID, nothing happened!"})
-
-    
-
-
-    
-
 
 if __name__ == '__main__':
     app.run(debug=True)
